@@ -1,6 +1,6 @@
 import os
 import requests
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,16 +12,32 @@ CLIENT_ID     = os.getenv("CLIENT_ID", "63d43218-3c42-4c04-8771-7259ae9cd58a")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET", "")
 DYNAMICS_URL  = os.getenv("DYNAMICS_URL", "https://yssycrm.crm2.dynamics.com")
 API_VERSION   = os.getenv("API_VERSION", "v9.2")
+D365_USER     = os.getenv("D365_USER", "")      # seu email YSSY
+D365_PASSWORD = os.getenv("D365_PASSWORD", "")  # sua senha
 
 
 def get_token():
     url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
-    data = {
-        "grant_type":    "client_credentials",
-        "client_id":     CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "scope":         f"{DYNAMICS_URL}/.default",
-    }
+
+    # Tenta ROPC (usuário + senha) se credenciais disponíveis
+    if D365_USER and D365_PASSWORD:
+        data = {
+            "grant_type":    "password",
+            "client_id":     CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "username":      D365_USER,
+            "password":      D365_PASSWORD,
+            "scope":         f"{DYNAMICS_URL}/.default openid profile",
+        }
+    else:
+        # Fallback: client credentials
+        data = {
+            "grant_type":    "client_credentials",
+            "client_id":     CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "scope":         f"{DYNAMICS_URL}/.default",
+        }
+
     r = requests.post(url, data=data, timeout=15)
     r.raise_for_status()
     return r.json()["access_token"]
@@ -96,21 +112,24 @@ def contacts():
 @app.route("/api/metrics")
 def metrics():
     try:
-        opps   = dynamics_get("opportunities", {"$select": "estimatedvalue,stepname,statuscode", "$top": 1000})
+        opps  = dynamics_get("opportunities", {
+            "$select": "estimatedvalue,stepname,statuscode",
+            "$top":    1000,
+        })
         items  = opps.get("value", [])
         open_v = [o for o in items if o.get("statuscode") == 1]
         won_v  = [o for o in items if o.get("statuscode") == 2]
-        pipeline   = sum(o.get("estimatedvalue") or 0 for o in open_v)
-        won_total  = sum(o.get("estimatedvalue") or 0 for o in won_v)
-        avg        = (pipeline / len(open_v)) if open_v else 0
-        total_cl   = len(won_v) + len([o for o in items if o.get("statuscode") == 3])
-        win_rate   = (len(won_v) / total_cl * 100) if total_cl else 0
+        pipeline  = sum(o.get("estimatedvalue") or 0 for o in open_v)
+        won_total = sum(o.get("estimatedvalue") or 0 for o in won_v)
+        avg       = (pipeline / len(open_v)) if open_v else 0
+        total_cl  = len(won_v) + len([o for o in items if o.get("statuscode") == 3])
+        win_rate  = (len(won_v) / total_cl * 100) if total_cl else 0
         return jsonify({
-            "ok": True,
-            "total": len(items),
-            "open": len(open_v),
+            "ok":       True,
+            "total":    len(items),
+            "open":     len(open_v),
             "pipeline": pipeline,
-            "won_total": won_total,
+            "won_total":won_total,
             "avg_deal": avg,
             "win_rate": round(win_rate, 1),
         })
@@ -122,7 +141,7 @@ def metrics():
 def ping():
     try:
         get_token()
-        return jsonify({"ok": True, "msg": "Autenticação OAuth2 bem-sucedida."})
+        return jsonify({"ok": True, "msg": "Autenticação bem-sucedida."})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
